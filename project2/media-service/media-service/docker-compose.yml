@@ -1,0 +1,67 @@
+x-app: &app
+  build: .
+  env_file: .env
+  environment: &app-env
+    RABBITMQ_URL: amqp://${RABBITMQ_USER:-media}:${RABBITMQ_PASSWORD:-media_dev_password}@rabbitmq:5672//
+    REDIS_URL: redis://redis:6379/0
+  depends_on:
+    rabbitmq: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  restart: unless-stopped
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-media}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-media_dev_password}
+    ports:
+      - "127.0.0.1:15672:15672"   # management UI, local only
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    <<: *app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      retries: 5
+
+  worker-images:
+    <<: *app
+    command: celery -A app.celery_app worker -Q images -n images@%h -c 4 --loglevel=INFO
+    environment: { <<: *app-env, WORKER_METRICS_PORT: "9101" }
+    mem_limit: 2g
+
+  worker-video:
+    <<: *app
+    command: celery -A app.celery_app worker -Q video -n video@%h -c 1 --loglevel=INFO
+    environment: { <<: *app-env, WORKER_METRICS_PORT: "9101", FFMPEG_THREADS: "4" }
+    mem_limit: 4g
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+
+volumes:
+  rabbitmq-data:
+  redis-data:

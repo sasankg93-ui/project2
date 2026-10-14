@@ -1,0 +1,14 @@
+groups:
+  - name: media
+    rules:
+      - alert: QueueBacklog
+        expr: media_queue_messages > 500
+        for: 5m
+        annotations: { summary: "Queue {{ $labels.queue }} has had >500 waiting messages for 5m" }
+      - alert: WorkerCPUSaturated
+        expr: avg by (job) (media_worker_cpu_percent) > 350
+        for: 10m
+        annotations: { summary: "Workers ({{ $labels.job }}) are CPU-saturated; scale out" }
+      - alert: JobsFailing
+        expr: increase(media_job_transitions_total{status="failed"}[15m]) > 20
+        annotations: { summary: "More than 20 job failures in 15m" }
